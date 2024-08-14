@@ -1,0 +1,1034 @@
+---
+title: "Assignment - AML"
+author: "Victor Hew"
+date: "2024-02-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load relevant packages
+
+```{r}
+# Load relevant packages
+library(dplyr)
+library(magrittr)
+library(tidyverse)
+library(skimr)
+library(ggplot2)
+library(stringr)
+library(DataExplorer)
+library(VIM)
+library(mice)
+library(missForest)
+library(caret)
+library(ROSE)
+library(DMwR)
+library(ROCR)
+library(data.table)
+library(caTools)
+library(glmnet)   
+library(broom)
+library(e1071)
+library(readr)
+library(tidymodels)
+library(RCurl)
+library(randomForest)
+```
+
+# Reading dataset
+
+```{r}
+# Read the data set from the CSV file and name the data frame as "Bank_Customer_Churn"
+Bank_Customer_Churn <- read.csv(file = "Customer-Churn-Records.csv", header = TRUE, stringsAsFactors = TRUE)
+```
+
+# Dataset Overview
+
+```{r}
+# Read first 10 rows of the data frame
+head(Bank_Customer_Churn, n = 10)
+```
+
+```{r}
+# Read dimensions of the data frame
+dim(Bank_Customer_Churn) # Row = 10,000; column = 18
+```
+
+```{r}
+# Check data types of each column
+str(Bank_Customer_Churn)
+```
+
+```{r}
+# Display summary of the dataset
+summary(Bank_Customer_Churn)
+```
+
+# Dataframe Operations
+
+```{r}
+# Delete RowNumber column which is redundant, along with Customer ID and Surname which serves no meaning to the ML model
+Bank_Customer_Churn <- Bank_Customer_Churn %>% 
+  select(-RowNumber) %>% 
+  select(-CustomerId) %>% 
+  select(-Surname)
+
+# Create a new variable called Age Group - derived from Age column
+Bank_Customer_Churn <- Bank_Customer_Churn %>%
+  mutate(Age_Group = case_when(
+    Age <= 18 ~ "0 - 18",
+    Age > 18 & Age <= 39 ~ "19 - 39",
+    Age > 39 & Age <= 59 ~ "40 - 59",
+    Age > 59  ~ "60+"
+  ))
+
+# Convert all data in the Card Type column from uppercase to sentence case
+Bank_Customer_Churn <- Bank_Customer_Churn %>% mutate(Card.Type = str_to_title(tolower(Card.Type)))
+```
+
+# Data Cleaning
+
+```{r}
+# Keep only unique rows on a data frame
+Bank_Customer_Churn <- distinct(Bank_Customer_Churn)
+
+# Data type conversion
+Bank_Customer_Churn <- Bank_Customer_Churn %>% 
+  mutate(HasCrCard = factor(HasCrCard)) %>% 
+  mutate(IsActiveMember = factor(IsActiveMember)) %>% 
+  mutate(Exited = factor(Exited)) %>% 
+  mutate(Complain = factor(Complain)) %>%
+  mutate(Satisfaction.Score = factor(Satisfaction.Score)) %>%
+  mutate(Geography = factor(Geography)) %>% 
+  mutate(Gender = factor(Gender)) %>% 
+  mutate(Card.Type = factor(Card.Type)) %>%
+  mutate(Age_Group = factor(Age_Group)) %>%
+  mutate(CreditScore = as.numeric(CreditScore)) %>% 
+  mutate(Age = as.numeric(Age)) %>% 
+  mutate(Tenure = as.numeric(Tenure)) %>% 
+  mutate(NumOfProducts = as.numeric(NumOfProducts)) %>% 
+  mutate(Point.Earned = as.numeric(Point.Earned))
+
+# Check data types of each column again
+str(Bank_Customer_Churn)
+```
+
+# EDA
+
+```{r}
+# Histogram (continuous variable)
+plot_histogram(Bank_Customer_Churn)
+```
+
+```{r}
+# Bar chart (Categorical variables)
+plot_bar(Bank_Customer_Churn)
+```
+
+```{r}
+# Density plot
+plot_density(Bank_Customer_Churn)
+```
+
+```{r}
+# Box plot
+plot_boxplot(Bank_Customer_Churn, by = 'Exited')
+```
+
+```{r}
+# Correlation between discrete variables
+plot_correlation(Bank_Customer_Churn, type = c('discrete'))
+```
+
+```{r}
+# Correlation between continuous variables
+plot_correlation(Bank_Customer_Churn, type = c('continuous'))
+```
+
+# Missing Values
+
+```{r}
+# Check missing values by columns
+colSums(sapply(Bank_Customer_Churn, is.na))
+```
+
+```{r}
+# Create 20% missing values at random
+Bank_Customer_Churn <- prodNA(Bank_Customer_Churn, noNA = 0.2)
+
+# Prior to treating missing values any blanks in the dataset must be converted to NA
+Bank_Customer_Churn[Bank_Customer_Churn == ''] <- NA
+
+# Viewing missing data
+plot_missing(Bank_Customer_Churn)
+```
+
+```{r}
+# Check missing values by columns again
+colSums(sapply(Bank_Customer_Churn, is.na))
+```
+
+```{r}
+# Create a function for mode
+# sorts unique factors and ta
+Mode <- function(x) { 
+      ux <- sort(unique(x))
+      ux[which.max(tabulate(match(x, ux)))] 
+}
+
+# Imputing missing values in continuous variables using median
+preProcValues <- preProcess(Bank_Customer_Churn, method = "medianImpute") 
+Bank_Customer_Churn <- predict(preProcValues, Bank_Customer_Churn)
+```
+
+```{r}
+# Identify non-numeric columns (i.e. factor variables)
+i2 <- !sapply(Bank_Customer_Churn, is.numeric)
+
+# Impute them with mode
+Bank_Customer_Churn[i2] <- lapply(Bank_Customer_Churn[i2], function(x)
+              replace(x, is.na(x), Mode(x[!is.na(x)])))
+
+# Check missing values by columns again
+colSums(sapply(Bank_Customer_Churn, is.na))
+```
+
+# One hot encoding
+
+```{r}
+# Geography
+dmy_geography <- dummyVars(~ Geography, data = Bank_Customer_Churn)
+Geography_onehot <- data.frame(predict(dmy_geography, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,Geography_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Geography")]
+```
+
+```{r}
+# Gender
+dmy_gender <- dummyVars(~ Gender, data = Bank_Customer_Churn)
+Gender_onehot <- data.frame(predict(dmy_gender, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,Gender_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Gender")]
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Gender.Female.1")]
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Gender.Male.1")]
+```
+
+```{r}
+# HasCrCard
+dmy_hascrcard <- dummyVars(~ HasCrCard, data = Bank_Customer_Churn)
+hascrcard_onehot <- data.frame(predict(dmy_hascrcard, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,Gender_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "HasCrCard")]
+```
+
+```{r}
+# IsActiveMember
+dmy_isactivemember <- dummyVars(~ IsActiveMember, data = Bank_Customer_Churn)
+isactivemember_onehot <- data.frame(predict(dmy_isactivemember, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,isactivemember_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "IsActiveMember")]
+```
+
+```{r}
+# Complain
+dmy_complain <- dummyVars(~ Complain, data = Bank_Customer_Churn)
+complain_onehot <- data.frame(predict(dmy_complain, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,complain_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Complain")]
+```
+
+```{r}
+# Satisfaction.Score
+dmy_satisfactionscore <- dummyVars(~ Satisfaction.Score, data = Bank_Customer_Churn)
+satisfactionscore_onehot <- data.frame(predict(dmy_satisfactionscore, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,satisfactionscore_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Satisfaction.Score")]
+```
+
+```{r}
+# Card.Type
+dmy_cardtype <- dummyVars(~ Card.Type, data = Bank_Customer_Churn)
+cardtype_onehot <- data.frame(predict(dmy_cardtype, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,cardtype_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Card.Type")]
+```
+
+```{r}
+# Age_Group
+dmy_agegroup <- dummyVars(~ Age_Group, data = Bank_Customer_Churn)
+agegroup_onehot <- data.frame(predict(dmy_agegroup, newdata = Bank_Customer_Churn))
+Bank_Customer_Churn <- cbind(Bank_Customer_Churn,agegroup_onehot)
+Bank_Customer_Churn <- Bank_Customer_Churn[, -which(names(Bank_Customer_Churn) == "Age_Group")]
+```
+
+# Address class imbalance
+
+```{r}
+table(Bank_Customer_Churn$Exited)
+```
+
+```{r}
+# ROSE - Oversampling
+Bank_Customer_Churn <- ovun.sample(Exited ~ ., data = Bank_Customer_Churn, method = "over", N = 16746)$data
+
+# Check again the proportion
+table(Bank_Customer_Churn$Exited)
+```
+
+# Min max normalization
+
+```{r}
+# Min-max normalization (suitable for continuous variables)
+Bank_Customer_Churn$CreditScore <- (Bank_Customer_Churn$CreditScore - min(Bank_Customer_Churn$CreditScore)) / 
+  (max(Bank_Customer_Churn$CreditScore) - min(Bank_Customer_Churn$CreditScore))
+
+Bank_Customer_Churn$Age <- (Bank_Customer_Churn$Age - min(Bank_Customer_Churn$Age)) / 
+  (max(Bank_Customer_Churn$Age) - min(Bank_Customer_Churn$Age))
+
+Bank_Customer_Churn$Tenure <- (Bank_Customer_Churn$Tenure - min(Bank_Customer_Churn$Tenure)) / 
+  (max(Bank_Customer_Churn$Tenure) - min(Bank_Customer_Churn$Tenure))
+
+Bank_Customer_Churn$Balance <- (Bank_Customer_Churn$Balance - min(Bank_Customer_Churn$Balance)) / 
+  (max(Bank_Customer_Churn$Balance) - min(Bank_Customer_Churn$Balance))
+
+Bank_Customer_Churn$NumOfProducts <- (Bank_Customer_Churn$NumOfProducts - min(Bank_Customer_Churn$NumOfProducts)) / 
+  (max(Bank_Customer_Churn$NumOfProducts) - min(Bank_Customer_Churn$NumOfProducts))
+
+Bank_Customer_Churn$EstimatedSalary <- (Bank_Customer_Churn$EstimatedSalary - min(Bank_Customer_Churn$EstimatedSalary)) / 
+  (max(Bank_Customer_Churn$EstimatedSalary) - min(Bank_Customer_Churn$EstimatedSalary))
+
+Bank_Customer_Churn$Point.Earned <- (Bank_Customer_Churn$Point.Earned - min(Bank_Customer_Churn$Point.Earned)) / 
+  (max(Bank_Customer_Churn$Point.Earned) - min(Bank_Customer_Churn$Point.Earned))
+```
+
+```{r}
+# Round to 3 decimal points after normalization
+Bank_Customer_Churn$CreditScore <- round(Bank_Customer_Churn$CreditScore, digits = 3)
+Bank_Customer_Churn$Age <- round(Bank_Customer_Churn$Age, digits = 3)
+Bank_Customer_Churn$Tenure <- round(Bank_Customer_Churn$Tenure, digits = 3)
+Bank_Customer_Churn$Balance <- round(Bank_Customer_Churn$Balance, digits = 3)
+Bank_Customer_Churn$NumOfProducts <- round(Bank_Customer_Churn$NumOfProducts, digits = 3)
+Bank_Customer_Churn$EstimatedSalary <- round(Bank_Customer_Churn$EstimatedSalary, digits = 3)
+Bank_Customer_Churn$Point.Earned <- round(Bank_Customer_Churn$Point.Earned, digits = 3)
+```
+
+
+
+# Logistic Regression (Baseline)
+
+```{r}
+# Set seed
+set.seed(1234)
+```
+
+```{r}
+# Train-test split
+split = sample.split(Bank_Customer_Churn$Exited, SplitRatio = 0.7)
+train_bank = subset(Bank_Customer_Churn, split == TRUE)
+test_bank = subset(Bank_Customer_Churn, split == FALSE)
+```
+
+```{r}
+# Fit the logistic regression model
+LR_baseline_classifier <- glm(Exited ~., train_bank, family = binomial)
+summary(LR_baseline_classifier)
+```
+
+```{r}
+# Predicting training set result 
+pred_prob_train_LR_baseline <- predict(LR_baseline_classifier, type = 'response', train_bank[ ,-7] ) 
+pred_class_train_LR_baseline <- ifelse(pred_prob_train_LR_baseline > 0.5, 1, 0)
+cm_train_LR_baseline <- table(train_bank$Exited, pred_class_train_LR_baseline)
+accuracy_train_LR_baseline <- sum(diag(cm_train_LR_baseline))/sum(cm_train_LR_baseline)
+accuracy_train_LR_baseline
+```
+
+```{r}
+# Predicting test set result 
+pred_prob_test_LR_baseline <- predict(LR_baseline_classifier, type = 'response', test_bank[ ,-7] )
+pred_class_test_LR_baseline <- ifelse(pred_prob_test_LR_baseline > 0.5, 1, 0)
+cm_test_LR_baseline <- table(test_bank$Exited, pred_class_test_LR_baseline)
+accuracy_test_LR_baseline <- sum(diag(cm_test_LR_baseline))/sum(cm_test_LR_baseline)
+accuracy_test_LR_baseline
+```
+
+```{r}
+# Train set
+# Predict values for ROC
+pred_train_LR_baseline <- prediction(pred_class_train_LR_baseline, train_bank$Exited)
+perf_train_LR_baseline <- performance(pred_train_LR_baseline, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_LR_baseline <- as.numeric(performance(pred_train_LR_baseline, "auc")@y.values)
+auc_train_LR_baseline <- round(auc_train_LR_baseline, 3)
+auc_train_LR_baseline
+```
+
+```{r}
+# Plot ROC Curve - LR_baseline (train set)
+plot(perf_train_LR_baseline, colorize = T, 
+     main = "ROC Curve - Baseline Logistic Regression Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_LR_baseline, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Test set
+# Predict values for ROC
+pred_test_LR_baseline <- prediction(pred_class_test_LR_baseline, test_bank$Exited)
+perf_test_LR_baseline <- performance(pred_test_LR_baseline, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_LR_baseline <- as.numeric(performance(pred_test_LR_baseline, "auc")@y.values)
+auc_test_LR_baseline <- round(auc_test_LR_baseline, 3)
+auc_test_LR_baseline
+```
+
+```{r}
+# Plot ROC Curve - LR_baseline (train set)
+plot(perf_test_LR_baseline, colorize = T, 
+     main = "ROC Curve - Baseline Logistic Regression Using Test Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_LR_baseline, title = "AUC:", cex = 1)
+```
+
+```{r}
+confusionMatrix(cm_train_LR_baseline)
+```
+
+```{r}
+confusionMatrix(cm_test_LR_baseline)
+```
+
+
+
+
+# Logistic Regression (L1 penalized)
+
+```{r}
+set.seed(300)
+```
+
+```{r}
+# Convert train data into matrix form
+a <- data.matrix(train_bank[,-7])
+b <- as.numeric(as.character(train_bank$Exited))
+```
+
+```{r}
+# Convert test data into matrix form
+c <- data.matrix(test_bank[,-7])
+d <- as.numeric(as.character(test_bank$Exited))
+```
+
+```{r}
+# Train set
+# Fitting LR model with lasso regularization (alpha = 1)
+train_lasso <- glmnet(a, b, family = "binomial", alpha = 1)
+
+# Find the best value for lambda using cross validation of cv.glmnet
+cv_out_train_lasso <- cv.glmnet(a, b, alpha = 1)
+
+# Plots MSE for various training and validation samples and various lambdas 
+plot(cv_out_train_lasso)
+```
+
+```{r}
+# Outputs created by cv_out_train_lasso
+names(cv_out_train_lasso)
+```
+
+```{r}
+# Value of lambda where the error is minimum
+lambda_min_train_lasso <- cv_out_train_lasso$lambda.min
+lambda_min_train_lasso
+```
+
+```{r}
+# Value of lambda where error is 1 standard deviation above the minimum
+lambda_1se_train_lasso <- cv_out_train_lasso$lambda.1se 
+lambda_1se_train_lasso
+```
+
+```{r}
+# Plot the output of lasso regression 
+plot(train_lasso, xvar = 'lambda', label = T)
+abline(v = log(cv_out_train_lasso$lambda.1se), col = "red", lty = "dashed")
+abline(v = log(cv_out_train_lasso$lambda.min), col = "blue", lty = "dashed")
+```
+
+```{r}
+# Set lambda.1se to one of these values and build the model
+train_lasso_final <- glmnet(a, b, family = "binomial", lambda = lambda_1se_train_lasso, alpha = 0)
+coef(train_lasso_final)
+```
+
+```{r}
+# Create plot for the coefficient of the fitted lasso regression model
+plot(coef(train_lasso_final))
+```
+
+```{r}
+# Prediction with training set 
+pred_prob_train_L1 <- predict(train_lasso_final, newx = a, type = "response")
+pred_class_train_L1 <- ifelse(pred_prob_train_L1 > 0.5, 1, 0)
+cm_train_L1 <- table(train_bank$Exited, pred_class_train_L1)
+accuracy_train_L1 <- sum(diag(cm_train_L1))/sum(cm_train_L1)
+accuracy_train_L1
+```
+
+```{r}
+# Train set - predict the prob values to draw ROC
+pred_train_L1 <- prediction(pred_class_train_L1, train_bank$Exited)
+perf_train_L1 <- performance(pred_train_L1, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_L1 <- as.numeric(performance(pred_train_L1, "auc")@y.values)
+auc_train_L1 <- round(auc_train_L1, 3)
+auc_train_L1
+```
+
+```{r}
+# Plot ROC Curve - LR_L1 (train set)
+plot(perf_train_L1, colorize = T, 
+     main = "ROC Curve - L1-Regularized Logistic Regression Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_L1, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Test set
+# Fitting LR model with lasso regularization (alpha = 1)
+test_lasso <- glmnet(c, d, family = "binomial", alpha = 1)
+
+# Find the best value for lambda using cross validation of cv.glmnet
+cv_out_test_lasso <- cv.glmnet(c, d, alpha = 1)
+
+# Plots MSE for various training and validation samples and various lambdas 
+plot(cv_out_test_lasso)
+```
+
+```{r}
+# Outputs created by cv_out_test_lasso
+names(cv_out_test_lasso)
+```
+
+```{r}
+# Value of lambda where the error is minimum
+lambda_min_test_lasso <- cv_out_test_lasso$lambda.min
+lambda_min_test_lasso
+```
+
+```{r}
+# Value of lambda where error is 1 standard deviation above the minimum
+lambda_1se_test_lasso <- cv_out_test_lasso$lambda.1se 
+lambda_1se_test_lasso
+```
+
+```{r}
+# Plot the output of lasso regression 
+plot(test_lasso, xvar = 'lambda', label = T)
+abline(v = log(cv_out_test_lasso$lambda.1se), col = "red", lty = "dashed")
+abline(v = log(cv_out_test_lasso$lambda.min), col = "blue", lty = "dashed")
+```
+
+```{r}
+# Set lambda.1se to one of these values and build the model
+test_lasso_final <- glmnet(c, d, family = "binomial", lambda = lambda_1se_test_lasso, alpha = 0)
+coef(test_lasso_final)
+```
+
+```{r}
+# Create plot for the coefficient of the fitted lasso regression model
+plot(coef(test_lasso_final))
+```
+
+```{r}
+# Prediction with test set 
+pred_prob_L1_test <- predict(test_lasso_final, newx = c, type = "response")
+pred_class_L1_test <- ifelse(pred_prob_L1_test > 0.5, 1, 0)
+cm_test_L1 <- table(test_bank$Exited, pred_class_L1_test)
+accuracy_test_L1 <- sum(diag(cm_test_L1))/sum(cm_test_L1)
+accuracy_test_L1
+```
+
+```{r}
+# Test set
+# To draw ROC we need to predict the prob values
+pred_test_L1 = prediction(pred_class_L1_test, test_bank$Exited)
+perf_test_L1 = performance(pred_test_L1, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_L1 <- as.numeric(performance(pred_test_L1, "auc")@y.values)
+auc_test_L1 <- round(auc_test_L1, 3)
+auc_test_L1
+```
+
+```{r}
+# Plots
+plot(perf_test_L1, colorize = T, 
+     main = "ROC Curve - L1-Regularised Logistic Regression Using Test Set ",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_L1, title = "AUC:", cex = 1)
+```
+
+```{r}
+# CM Comparison 
+confusionMatrix(cm_train_L1)
+```
+
+```{r}
+confusionMatrix(cm_test_L1)
+```
+
+
+
+# SVM (Baseline)
+
+```{r}
+set.seed(141)
+svm_poly_bank <- svm(Exited ~ ., data = train_bank, kernel = "poly")
+summary(svm_poly_bank)
+```
+
+```{r}
+# Prediction Using Train Set
+pred_poly_train_bank <- predict(svm_poly_bank, train_bank)
+pred_class_train_poly <- ifelse(as.numeric(as.character(pred_poly_train_bank)) > 0.5, 1, 0)
+cm_train_poly <- table(train_bank$Exited, pred_class_train_poly)
+accuracy_train_poly <- sum(diag(cm_train_poly))/sum(cm_train_poly)
+accuracy_train_poly
+```
+
+```{r}
+pred_poly_train = prediction(pred_class_train_poly, train_bank$Exited)
+perf_poly_train = performance(pred_poly_train, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_poly <- as.numeric(performance(pred_poly_train, "auc")@y.values)
+auc_train_poly <- round(auc_train_poly, 3)
+auc_train_poly
+```
+
+```{r}
+# Plots
+plot(perf_poly_train, colorize = T, 
+     main = "ROC Curve - Polynomial SVM Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_poly, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Prediction Using Test Set
+pred_poly_test_bank <- predict(svm_poly_bank, test_bank)
+pred_class_test_poly <- ifelse(as.numeric(as.character(pred_poly_test_bank)) > 0.5, 1, 0)
+cm_test_poly <- table(test_bank$Exited, pred_class_test_poly)
+accuracy_test_poly <- sum(diag(cm_test_poly))/sum(cm_test_poly)
+accuracy_test_poly
+```
+
+```{r}
+pred_poly_test = prediction(pred_class_test_poly, test_bank$Exited)
+perf_poly_test = performance(pred_poly_test, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_poly <- as.numeric(performance(pred_poly_test, "auc")@y.values)
+auc_test_poly <- round(auc_test_poly, 3)
+auc_test_poly
+```
+
+```{r}
+# Plots
+plot(perf_poly_test, colorize = T, 
+     main = "ROC Curve - Polynomial SVM Using Test Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_poly, title = "AUC:", cex = 1)
+```
+
+```{r}
+confusionMatrix(table(pred_poly_train_bank, train_bank$Exited))
+```
+
+```{r}
+confusionMatrix(table(pred_poly_test_bank, test_bank$Exited))
+```
+
+
+# SVM (grid search)
+
+```{r}
+# K-fold cross validation
+train.control <- trainControl(method = "cv", number = 10, verboseIter = T)
+
+set.seed(141)
+```
+
+```{r}
+# Tunes the hyper-parameters of the model using grid search method
+tune_grid <- list(epsilon = seq (0, 1, 0.1), cost = 2^(0:2))
+tuned_model <- tune.svm(Exited ~ ., data = train_bank, range = tune_grid)
+print(tuned_model)
+```
+
+```{r}
+# Plot performance of SVM
+plot(tuned_model)
+```
+
+```{r}
+summary(tuned_model)
+```
+
+```{r}
+# Optimal tuned model
+opt_model = tuned_model$best.model
+summary(opt_model)
+```
+
+```{r}
+# Building best svm model
+svm_best <- svm (Exited ~ ., data = train_bank, epsilon = 0, cost = 1)
+summary(svm_best)
+```
+
+```{r}
+# Predict train result
+pred_svm_best_train_bank <- predict(svm_best, train_bank)
+pred_class_train_svm_best <- ifelse(as.numeric(as.character(pred_svm_best_train_bank)) > 0.5, 1, 0)
+cm_train_svm_best <- table(train_bank$Exited, pred_class_train_svm_best)
+accuracy_train_svm_best <- sum(diag(cm_train_svm_best))/sum(cm_train_svm_best)
+accuracy_train_svm_best
+```
+
+```{r}
+pred_svm_best_train = prediction(pred_class_train_svm_best, train_bank$Exited)
+perf_svm_best_train = performance(pred_svm_best_train, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_svm_best <- as.numeric(performance(pred_svm_best_train, "auc")@y.values)
+auc_train_svm_best <- round(auc_train_svm_best, 3)
+auc_train_svm_best
+```
+
+```{r}
+# Plots
+plot(perf_svm_best_train, colorize = T, 
+     main = "ROC Curve - Tuned SVM with Grid Search Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_svm_best, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Prediction on test set
+pred_svm_best_test_bank <- predict(svm_best, test_bank)
+pred_class_test_svm_best <- ifelse(as.numeric(as.character(pred_svm_best_test_bank)) > 0.5, 1, 0)
+cm_test_svm_best <- table(test_bank$Exited, pred_class_test_svm_best)
+accuracy_test_svm_best <- sum(diag(cm_test_svm_best))/sum(cm_test_svm_best)
+accuracy_test_svm_best
+```
+
+```{r}
+pred_svm_best_test = prediction(pred_class_test_svm_best, test_bank$Exited)
+perf_svm_best_test = performance(pred_svm_best_test, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_svm_best <- as.numeric(performance(pred_svm_best_test, "auc")@y.values)
+auc_test_svm_best <- round(auc_test_svm_best, 3)
+auc_test_svm_best
+```
+
+```{r}
+# Plots
+plot(perf_svm_best_test, colorize = T, 
+     main = "ROC Curve - Tuned SVM with Grid Search Using Test Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_svm_best, title = "AUC:", cex = 1)
+```
+
+```{r}
+confusionMatrix(table(pred_svm_best_train_bank, train_bank$Exited))
+```
+
+```{r}
+confusionMatrix(table(pred_svm_best_test_bank, test_bank$Exited))
+```
+
+
+# RF - baseline
+
+```{r}
+set.seed(546)
+rf_bank <- randomForest(Exited ~ ., data = train_bank)
+print(rf_bank)
+```
+
+```{r}
+attributes(rf_bank)
+```
+
+```{r}
+## Predicting the Training set results
+pred_prob_train_RF <- predict(rf_bank, train_bank)
+cm_train_RF = table(pred_prob_train_RF, train_bank$Exited)
+accuracy_train_RF <- sum(diag(cm_train_RF))/sum(cm_train_RF)
+accuracy_train_RF
+```
+
+```{r}
+## Predicting the Test set results
+pred_prob_test_RF <- predict(rf_bank, test_bank)
+cm_test_RF = table(pred_prob_test_RF, test_bank$Exited)
+accuracy_test_RF <- sum(diag(cm_test_RF))/sum(cm_test_RF)
+accuracy_test_RF
+```
+
+```{r}
+## ROC and AUC
+# Train set
+# To draw ROC we need to predict the prob values
+pred_train_RF = prediction(as.numeric(as.character(pred_prob_train_RF)), train_bank$Exited)
+perf_train_RF = performance(pred_train_RF, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_RF <- as.numeric(performance(pred_train_RF, "auc")@y.values)
+auc_train_RF <- round(auc_train_RF, 3)
+auc_train_RF
+```
+
+```{r}
+# Plots
+plot(perf_train_RF, colorize = T, 
+     main = "ROC Curve - Baseline Random Forest Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_RF, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Test set
+# To draw ROC we need to predict the prob values
+pred_test_RF = prediction(as.numeric(as.character(pred_prob_test_RF)), test_bank$Exited)
+perf_test_RF = performance(pred_test_RF, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_RF <- as.numeric(performance(pred_test_RF, "auc")@y.values)
+auc_test_RF <- round(auc_test_RF, 3)
+auc_test_RF
+```
+
+```{r}
+# Plots
+plot(perf_test_RF, colorize = T, 
+     main = "ROC Curve - Baseline Random Forest Using Test Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_RF, title = "AUC:", cex = 1)
+```
+
+```{r}
+# CM Comparison 
+confusionMatrix(cm_train_RF)
+```
+
+```{r}
+confusionMatrix(cm_test_RF)
+```
+
+```{r}
+varImpPlot(rf_bank)
+```
+
+```{r}
+importance(rf_bank)
+```
+
+
+# RF - Grid Search
+
+```{r}
+# Tune using Grid Search 
+grid_control_rf <- trainControl(method="cv", number=10, search="grid")
+set.seed(546)
+```
+
+```{r}
+tunegrid <- expand.grid(.mtry=c(1:15)) 
+rf_grid <- train(Exited~., data=train_bank, method="rf", metric="Accuracy", tuneGrid=tunegrid, trControl=grid_control_rf)
+print(rf_grid)
+```
+
+```{r}
+plot(rf_grid)
+```
+
+```{r}
+attributes(rf_grid)
+```
+
+```{r}
+## Predicting the Training set results
+pred_prob_train_RF_grid <- predict(rf_grid, train_bank)
+cm_train_RF_grid = table(pred_prob_train_RF_grid, train_bank$Exited)
+accuracy_train_RF_grid <- sum(diag(cm_train_RF_grid))/sum(cm_train_RF_grid)
+accuracy_train_RF_grid
+```
+
+```{r}
+## Predicting the Test set results
+pred_prob_test_RF_grid <- predict(rf_grid, test_bank)
+cm_test_RF_grid = table(pred_prob_test_RF_grid, test_bank$Exited)
+accuracy_test_RF_grid <- sum(diag(cm_test_RF_grid))/sum(cm_test_RF_grid)
+accuracy_test_RF_grid
+```
+
+```{r}
+## ROC and AUC
+# Train set
+# To draw ROC we need to predict the prob values
+pred_train_RF_grid = prediction(as.numeric(as.character(pred_prob_train_RF_grid)), train_bank$Exited)
+perf_train_RF_grid = performance(pred_train_RF_grid, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_train_RF_grid <- as.numeric(performance(pred_train_RF_grid, "auc")@y.values)
+auc_train_RF_grid <- round(auc_train_RF_grid, 3)
+auc_train_RF_grid
+```
+
+```{r}
+# Plots
+plot(perf_train_RF_grid, colorize = T, 
+     main = "ROC Curve - Random Forest with Grid Search Using Train Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_train_RF_grid, title = "AUC:", cex = 1)
+```
+
+```{r}
+# Test set
+# To draw ROC we need to predict the prob values
+pred_test_RF_grid = prediction(as.numeric(as.character(pred_prob_test_RF_grid)), test_bank$Exited)
+perf_test_RF_grid = performance(pred_test_RF_grid, "tpr", "fpr")
+```
+
+```{r}
+# Area Under Curve
+auc_test_RF_grid <- as.numeric(performance(pred_test_RF_grid, "auc")@y.values)
+auc_test_RF_grid <- round(auc_test_RF_grid, 3)
+auc_test_RF_grid
+```
+
+```{r}
+# Plots
+plot(perf_test_RF_grid, colorize = T, 
+     main = "ROC Curve - Random Forest with Grid Search Using Test Set",
+     ylab = "Sensitivity",
+     xlab = "1-Specificity",
+     print.cutoffs.at=seq(0,1,0.3),
+     text.adj= c(-0.2,1.7))
+abline(a = 0, b = 1)
+legend(.6, .4, auc_test_RF_grid, title = "AUC:", cex = 1)
+```
+
+```{r}
+# CM Comparison 
+confusionMatrix(cm_train_RF_grid)
+```
+
+```{r}
+confusionMatrix(cm_test_RF_grid)
+```
+
+
+# Combine ROC Plots
+
+```{r}
+pred_list <- list(pred_test_LR_baseline, pred_test_L1, pred_poly_test, pred_svm_best_test, pred_test_RF, pred_test_RF_grid)
+```
+
+```{r}
+plot(0, 0, xlim=c(0,1), ylim=c(0,1), type="n", xlab="False Positive Rate",
+     ylab="True Positive Rate")
+
+colors <- c("red", "blue","green","yellow","purple","orange")
+for (i in seq_along(pred_list)) {
+  perf <- performance(pred_list[[i]], "tpr", "fpr")
+  lines(perf@x.values[[1]], perf@y.values[[1]], col=colors[i], lwd=3)
+}
+
+# add a legend
+legend("bottomright", legend=c("LR","Lasso",
+                               "Polynomial SVM","Tuned SVM",
+                               "RF","Tuned RF"),
+                               col=colors, lwd=3)
+```
+
+
+
+
+
